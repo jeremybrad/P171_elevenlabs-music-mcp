@@ -58,7 +58,7 @@ class Config:
     # API Configuration
     api_key: str
     api_base_url: str = "https://api.elevenlabs.io/v1"
-    api_timeout: int = 30
+    api_timeout: int = 120  # Music generation can take 60-90 seconds
     max_retries: int = 3
 
     # Output Directories
@@ -173,7 +173,7 @@ class Config:
         return cls(
             api_key=api_key,
             api_base_url=os.getenv("ELEVENLABS_API_URL", "https://api.elevenlabs.io/v1"),
-            api_timeout=int(os.getenv("API_TIMEOUT_SECONDS", "30")),
+            api_timeout=int(os.getenv("API_TIMEOUT_SECONDS", "120")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
             music_output_dir=Path(os.getenv("MUSIC_OUTPUT_DIR", "~/Music/ElevenLabs/generated")).expanduser(),
             journal_output_dir=Path(os.getenv("JOURNAL_OUTPUT_DIR", "~/Music/ElevenLabs/journal")).expanduser(),
