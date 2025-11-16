@@ -29,10 +29,10 @@ from music_generator import MusicGenerator
 from file_manager import FileManager
 from config_manager import Config
 
-# Phase 2+ imports (not yet implemented)
-# from composition_planner import CompositionPlanner
-# from context_analyzer import ContextAnalyzer
-# from preference_learner import PreferenceLearner
+# Phase 2+ imports
+from composition_planner import CompositionPlanner
+from context_analyzer import ContextAnalyzer
+from preference_learner import PreferenceLearner
 
 # Load environment variables
 load_dotenv()
@@ -72,12 +72,12 @@ class MusicMCPServer:
         )
         self.file_manager = FileManager(self.config.music_output_dir)
 
-        # Phase 2+ components (not yet implemented)
-        # self.planner = CompositionPlanner()
-        # self.context_analyzer = ContextAnalyzer()
-        # self.preference_learner = PreferenceLearner(self.config.preference_storage_path)
+        # Phase 2 components
+        self.planner = CompositionPlanner()
+        self.context_analyzer = ContextAnalyzer()
+        self.preference_learner = PreferenceLearner(self.config.preference_storage_path)
 
-        logging.info("All components initialized")
+        logging.info("All components initialized (including Phase 2 features)")
 
         # Register all MCP tools
         self.register_tools()
@@ -176,6 +176,19 @@ class MusicMCPServer:
 
                 logging.info(f"Music saved successfully: {audio_path}")
 
+                # Record preference for learning (Phase 2)
+                if self.config.enable_preference_learning:
+                    try:
+                        self.preference_learner.record_generation(
+                            prompt=prompt,
+                            metadata=file_metadata,
+                            result_path=audio_path
+                        )
+                        logging.debug("Preference recorded for learning")
+                    except Exception as e:
+                        # Don't fail the request if preference recording fails
+                        logging.warning(f"Failed to record preference: {e}")
+
                 # Build response
                 return {
                     "success": True,
@@ -200,33 +213,120 @@ class MusicMCPServer:
         @self.server.tool()
         async def create_composition_plan(
             prompt: str,
-            total_duration_ms: int,
-            sections: list = None,
+            total_duration_ms: int = 60000,
+            sections: int = None,
             mood_progression: str = None
         ) -> dict:
             """
             Generate a structured composition plan before creating music.
-            
+
+            Creates an intelligent multi-section plan that can be used with
+            generate_music_structured for sophisticated compositions.
+
             Args:
-                prompt: High-level description
-                total_duration_ms: Total length desired
-                sections: Optional pre-defined sections
+                prompt: High-level description (e.g., "focus music for coding")
+                total_duration_ms: Total length desired (default: 60000 = 1 minute)
+                sections: Optional number of sections (default: auto-detect)
                 mood_progression: Optional mood flow (e.g., "calm to energetic")
-                
+
             Returns:
-                dict with composition_plan structure
+                dict with:
+                - success: bool
+                - composition_plan: Structured plan with sections
+                - template_used: str (if template matched)
+                - reasoning: str explaining the plan
             """
             try:
-                # TODO: Implement
+                logging.info(f"Creating composition plan: '{prompt[:50]}...'")
+
+                # If mood progression specified, use progressive plan
+                if mood_progression:
+                    # Parse mood progression
+                    parts = mood_progression.lower().split(" to ")
+                    if len(parts) == 2:
+                        start_mood, end_mood = parts
+                        plan = self.planner.create_progressive_plan(
+                            start_mood=start_mood.strip(),
+                            end_mood=end_mood.strip(),
+                            duration_ms=total_duration_ms,
+                            num_sections=sections or 3
+                        )
+
+                        from dataclasses import asdict
+                        return {
+                            "success": True,
+                            "composition_plan": asdict(plan) if hasattr(plan, '__dataclass_fields__') else plan,
+                            "mood_progression": mood_progression,
+                            "reasoning": f"Created progressive plan from {start_mood} to {end_mood}"
+                        }
+
+                # Otherwise create from prompt (may use template)
+                plan = self.planner.create_plan_from_prompt(
+                    prompt=prompt,
+                    total_duration_ms=total_duration_ms,
+                    num_sections=sections
+                )
+
+                # Check if a template was used
+                template_used = None
+                for template_name in ["focus_work", "energetic_workout", "calming_meditation",
+                                     "creative_flow", "dramatic_build"]:
+                    if template_name.replace("_", " ") in prompt.lower():
+                        template_used = template_name
+                        break
+
+                from dataclasses import asdict
+                plan_dict = asdict(plan) if hasattr(plan, '__dataclass_fields__') else plan
+
                 return {
-                    "success": False,
-                    "error": "Not implemented yet"
+                    "success": True,
+                    "composition_plan": plan_dict,
+                    "template_used": template_used,
+                    "total_duration_ms": total_duration_ms,
+                    "sections_count": len(plan.sections) if hasattr(plan, 'sections') else len(plan_dict.get("sections", [])),
+                    "reasoning": self._explain_plan(plan_dict if isinstance(plan_dict, dict) else plan, template_used)
                 }
+
             except Exception as e:
+                logging.error(f"Composition plan creation failed: {e}", exc_info=True)
                 return {
                     "success": False,
-                    "error": str(e)
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
                 }
+
+        def _explain_plan(self, plan, template: str = None) -> str:
+            """Generate human-readable explanation of composition plan."""
+            # Handle both dict and dataclass formats
+            if isinstance(plan, dict):
+                sections = plan.get("sections", [])
+            else:
+                sections = plan.sections if hasattr(plan, 'sections') else []
+
+            if not sections:
+                return "Created basic plan"
+
+            if template:
+                return f"Used '{template}' template with {len(sections)} sections"
+
+            # Describe the progression
+            if len(sections) <= 1:
+                first_section = sections[0]
+                if isinstance(first_section, dict):
+                    prompt = first_section.get('style', first_section.get('prompt', 'unknown'))
+                else:
+                    prompt = first_section.style if hasattr(first_section, 'style') else 'unknown'
+                return f"Single section: {prompt}"
+
+            # Get prompts from sections
+            def get_prompt(section):
+                if isinstance(section, dict):
+                    return section.get('style', section.get('prompt', ''))
+                return section.style if hasattr(section, 'style') else ''
+
+            first = get_prompt(sections[0])
+            last = get_prompt(sections[-1])
+            return f"Created {len(sections)}-section plan progressing from '{first[:30]}...' to '{last[:30]}...'"
         
         # Tool 3: Generate from composition plan
         @self.server.tool()
@@ -237,25 +337,119 @@ class MusicMCPServer:
         ) -> dict:
             """
             Generate music from a detailed composition plan.
-            
+
+            Uses a structured multi-section composition plan to create
+            sophisticated music with mood progressions and transitions.
+
             Args:
                 composition_plan: Structured plan from create_composition_plan
-                strict_duration: Enforce exact section durations
-                metadata: Optional metadata tags
-                
+                    Must contain "sections" list with prompts and durations
+                strict_duration: Enforce exact section durations (default: False)
+                metadata: Optional metadata tags to include
+
             Returns:
-                dict with audio_path and generation details
+                dict with:
+                - success: bool
+                - audio_path: str (if successful)
+                - metadata: dict with composition details
+                - sections_generated: int
+                - total_duration_ms: int
+                - error: str (if failed)
             """
             try:
-                # TODO: Implement
+                logging.info("Generating structured music from composition plan")
+
+                # Validate composition plan
+                if not composition_plan or "sections" not in composition_plan:
+                    return {
+                        "success": False,
+                        "error": "Invalid composition_plan: must contain 'sections' list"
+                    }
+
+                sections = composition_plan.get("sections", [])
+                if not sections:
+                    return {
+                        "success": False,
+                        "error": "Composition plan has no sections"
+                    }
+
+                # Initialize generator session if needed
+                if not self.generator.session:
+                    await self.generator.__aenter__()
+
+                # Generate music using structured method
+                result = await self.generator.generate_structured(
+                    composition_plan=composition_plan,
+                    strict_duration=strict_duration
+                )
+
+                # Check for errors
+                if not result.success:
+                    response = {
+                        "success": False,
+                        "error": result.error
+                    }
+                    if result.suggested_prompt:
+                        response["suggested_prompt"] = result.suggested_prompt
+                        response["message"] = (
+                            f"Copyright issue detected. Adjust your composition plan."
+                        )
+                    return response
+
+                # Build comprehensive metadata
+                file_metadata = metadata or {}
+                file_metadata.update({
+                    "composition_plan": composition_plan,
+                    "sections_count": len(sections),
+                    "total_duration_ms": sum(s.get("duration_ms", 0) for s in sections),
+                    "strict_duration": strict_duration,
+                    "generated_at": datetime.now().isoformat(),
+                    "generation_type": "structured"
+                })
+
+                # Create descriptive prompt for filename
+                first_section = sections[0].get("prompt", "structured_music")
+                filename_prompt = f"{first_section} (structured)"
+
+                # Save to filesystem
+                audio_path, metadata_path = self.file_manager.save_music(
+                    audio_data=result.audio_data,
+                    metadata=file_metadata,
+                    prompt=filename_prompt
+                )
+
+                logging.info(f"Structured music saved: {audio_path}")
+
+                # Record preference for learning (Phase 2)
+                if self.config.enable_preference_learning:
+                    try:
+                        self.preference_learner.record_generation(
+                            prompt=filename_prompt,
+                            metadata=file_metadata,
+                            result_path=audio_path
+                        )
+                        logging.debug("Preference recorded for structured generation")
+                    except Exception as e:
+                        logging.warning(f"Failed to record preference: {e}")
+
+                # Build response
                 return {
-                    "success": False,
-                    "error": "Not implemented yet"
+                    "success": True,
+                    "audio_path": str(audio_path),
+                    "metadata_path": str(metadata_path),
+                    "file_size_bytes": len(result.audio_data),
+                    "sections_generated": len(sections),
+                    "total_duration_ms": file_metadata["total_duration_ms"],
+                    "composition_plan": composition_plan,
+                    "message": f"Successfully generated {len(sections)}-section composition: {audio_path.name}"
                 }
+
             except Exception as e:
+                logging.error(f"Structured music generation failed: {e}", exc_info=True)
                 return {
                     "success": False,
-                    "error": str(e)
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
                 }
         
         # Tool 4: Analyze mood for music suggestion
@@ -268,27 +462,158 @@ class MusicMCPServer:
         ) -> dict:
             """
             Analyze context and suggest appropriate music parameters.
-            
+
+            This is the "magic" tool that enables AI agents like Betty to
+            automatically suggest music based on conversation context, user
+            mood, and activity. Perfect for proactive music suggestions.
+
             Args:
-                context: Text to analyze for mood
-                activity: Optional activity type (e.g., "coding", "writing")
+                context: Text to analyze for mood (e.g., conversation snippet,
+                    user message, journal entry)
+                activity: Optional explicit activity (e.g., "coding", "writing")
+                    If not provided, will attempt to infer from context
                 time_of_day: Optional time context (e.g., "morning", "evening")
-                recent_music: Optional list of recently generated tracks
-                
+                recent_music: Optional list of recently generated prompts
+                    Used to avoid repetition
+
             Returns:
-                dict with suggested_prompt, duration, mood_analysis, reasoning
+                dict with:
+                - success: bool
+                - suggested_prompt: str (music prompt to use)
+                - suggested_duration_ms: int
+                - mood_detected: str
+                - activity_detected: str
+                - confidence: float (0.0-1.0)
+                - reasoning: str (explanation of suggestion)
+                - alternative_prompts: list (other options)
             """
             try:
-                # TODO: Implement
-                return {
-                    "success": False,
-                    "error": "Not implemented yet"
+                logging.info(f"Analyzing mood from context: '{context[:50]}...'")
+
+                # Detect mood from context
+                mood_result = self.context_analyzer.detect_mood(context)
+                detected_mood = mood_result["mood"]
+                mood_confidence = mood_result["confidence"]
+
+                # Detect or use provided activity
+                if activity:
+                    detected_activity = activity
+                    activity_confidence = 1.0
+                else:
+                    activity_result = self.context_analyzer.detect_activity(context)
+                    detected_activity = activity_result["activity"]
+                    activity_confidence = activity_result["confidence"]
+
+                logging.info(f"Detected: mood={detected_mood} ({mood_confidence:.2f}), "
+                           f"activity={detected_activity} ({activity_confidence:.2f})")
+
+                # Get music suggestion based on detected context
+                suggested_prompt = self.context_analyzer.suggest_music_for_context(
+                    activity=detected_activity,
+                    mood=detected_mood,
+                    duration_ms=60000,  # Default duration
+                    time_of_day=time_of_day
+                )
+
+                # Check preference learner for personalized recommendations
+                recommendations = []
+                if self.config.enable_preference_learning:
+                    recommendations = self.preference_learner.get_recommendations(
+                        activity=detected_activity,
+                        mood=detected_mood,
+                        limit=3
+                    )
+
+                # Generate alternative prompts
+                alternatives = []
+                if recommendations:
+                    # Include user's past preferences
+                    alternatives.extend(recommendations[:2])
+
+                # Determine appropriate duration based on activity
+                duration_map = {
+                    "coding": 120000,      # 2 minutes
+                    "writing": 90000,      # 1.5 minutes
+                    "studying": 120000,    # 2 minutes
+                    "exercising": 180000,  # 3 minutes
+                    "relaxing": 120000,    # 2 minutes
+                    "meeting": 60000,      # 1 minute
                 }
+                suggested_duration = duration_map.get(detected_activity, 60000)
+
+                # Build reasoning explanation
+                reasoning = self._build_reasoning(
+                    detected_mood,
+                    detected_activity,
+                    mood_confidence,
+                    activity_confidence,
+                    time_of_day,
+                    len(recommendations) > 0
+                )
+
+                # Calculate overall confidence
+                overall_confidence = (mood_confidence + activity_confidence) / 2
+
+                return {
+                    "success": True,
+                    "suggested_prompt": suggested_prompt,
+                    "suggested_duration_ms": suggested_duration,
+                    "mood_detected": detected_mood,
+                    "activity_detected": detected_activity,
+                    "mood_confidence": mood_confidence,
+                    "activity_confidence": activity_confidence,
+                    "overall_confidence": overall_confidence,
+                    "reasoning": reasoning,
+                    "alternative_prompts": alternatives,
+                    "personalized": len(recommendations) > 0,
+                    "time_of_day": time_of_day
+                }
+
             except Exception as e:
+                logging.error(f"Mood analysis failed: {e}", exc_info=True)
                 return {
                     "success": False,
-                    "error": str(e)
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
                 }
+
+        def _build_reasoning(
+            self,
+            mood: str,
+            activity: str,
+            mood_conf: float,
+            activity_conf: float,
+            time_of_day: str = None,
+            personalized: bool = False
+        ) -> str:
+            """Build human-readable reasoning for music suggestion."""
+            parts = []
+
+            # Mood reasoning
+            if mood_conf > 0.7:
+                parts.append(f"Detected strong {mood} mood")
+            elif mood_conf > 0.4:
+                parts.append(f"Detected {mood} mood")
+            else:
+                parts.append(f"Uncertain mood (guessing {mood})")
+
+            # Activity reasoning
+            if activity_conf > 0.7:
+                parts.append(f"clearly doing {activity}")
+            elif activity_conf > 0.4:
+                parts.append(f"possibly {activity}")
+            else:
+                parts.append(f"activity unclear (guessing {activity})")
+
+            # Time of day
+            if time_of_day:
+                parts.append(f"during {time_of_day}")
+
+            # Personalization
+            if personalized:
+                parts.append("considering your past preferences")
+
+            return "; ".join(parts) + "."
         
         # Tool 5: Journal entry with music (Phase 3)
         @self.server.tool()
@@ -323,7 +648,7 @@ class MusicMCPServer:
                 }
 
 
-        logging.info("✅ Registered MCP tools (Phase 1: generate_music_simple, Phase 2+: other tools)")
+        logging.info("✅ Registered all MCP tools (Phase 1+2: music generation with composition planning, mood analysis, and preference learning)")
     
     async def run(self):
         """Start the MCP server with stdio transport."""
