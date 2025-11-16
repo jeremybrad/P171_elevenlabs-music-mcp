@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "elevenlabs-music": {
+      "command": "python",
+      "args": [
+        "/Users/jeremybradford/SyncedProjects/P171_elevenlabs-music-mcp/src/music_mcp_server.py"
+      ],
+      "env": {
+        "ELEVENLABS_API_KEY": "YOUR_API_KEY_HERE",
+        "MUSIC_OUTPUT_DIR": "/Users/jeremybradford/Music/ElevenLabs/generated",
+        "JOURNAL_OUTPUT_DIR": "/Users/jeremybradford/Music/ElevenLabs/journal",
+        "ENABLE_PREFERENCE_LEARNING": "true",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
