@@ -82,7 +82,7 @@ class ContextAnalyzer:
         return {
             "frustrated": [
                 "fuck", "damn", "ugh", "shit", "broken", "not working",
-                "frustrated", "annoyed", "angry", "hate this", "stupid",
+                "frustrated", "frustrating", "annoyed", "angry", "hate this", "stupid",
                 "doesn't work", "error", "failed", "wrong"
             ],
             "stressed": [
@@ -124,11 +124,12 @@ class ContextAnalyzer:
         return {
             "coding": [
                 "code", "coding", "programming", "debug", "implement",
-                "function", "bug", "compile", "python", "javascript"
+                "function", "bug", "compile", "python", "javascript",
+                "authentication", "API", "working on"
             ],
             "writing": [
                 "writing", "blog", "article", "document", "draft",
-                "essay", "email", "report"
+                "essay", "email", "report", "documentation"
             ],
             "brainstorming": [
                 "brainstorm", "ideas", "thinking", "planning", "strategy",
@@ -412,10 +413,32 @@ class ContextAnalyzer:
         Returns:
             dict with activity and confidence
         """
-        conversation_analysis = self.analyze_conversation(context, recent_prompts=[])
+        context_lower = context.lower()
+        activity_scores = {}
+
+        # Score each activity based on keyword matches
+        for activity, keywords in self.activity_keywords.items():
+            score = sum(1 for keyword in keywords if keyword in context_lower)
+            if score > 0:
+                activity_scores[activity] = score
+
+        # No strong indicators
+        if not activity_scores:
+            return {
+                "activity": "unknown",
+                "confidence": 0.3
+            }
+
+        # Get top activity
+        detected_activity = max(activity_scores, key=activity_scores.get)
+        score = activity_scores[detected_activity]
+
+        # Calculate confidence
+        confidence = min(0.5 + (score * 0.15), 0.95)
+
         return {
-            "activity": conversation_analysis.inferred_activity or "unknown",
-            "confidence": 0.7 if conversation_analysis.inferred_activity else 0.3
+            "activity": detected_activity,
+            "confidence": confidence
         }
 
 
